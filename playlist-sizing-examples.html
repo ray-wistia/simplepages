@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Playlist a11y verification (PR 5930)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        background: #0d0d12;
+        color: #eee;
+      }
+      header.page {
+        padding: 12px 16px;
+        position: sticky;
+        top: 0;
+        background: #16161d;
+        border-bottom: 1px solid #333;
+        z-index: 10;
+      }
+      header.page button {
+        font-size: 14px;
+        padding: 6px 10px;
+        margin-right: 8px;
+        cursor: pointer;
+      }
+      .report {
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+        padding: 8px 16px;
+        background: #101018;
+        border-bottom: 1px solid #333;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 32px;
+        padding: 24px 16px;
+        align-items: flex-start;
+      }
+      .case {
+        border: 1px dashed #444;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      .case h2 {
+        font-size: 13px;
+        color: #9aa;
+        margin: 0 0 8px;
+        font-weight: 600;
+      }
+    </style>
+    <!-- LOCAL build over HTTPS via Grand Central (player.wistia.io -> dev
+    server). Same-origin relative path so the carousel/player bundles the
+    playlist pulls in also resolve to the local build over HTTPS. -->
+    <script src="/external/playlist-embed.js" async></script>
+  </head>
+  <body>
+    <header class="page">
+      <button id="toggle-spacing" type="button">Toggle WCAG 1.4.12 text-spacing override</button>
+      <button id="toggle-longtitle" type="button">Toggle very-long title/name</button>
+      <button id="run-audit" type="button">Re-run a11y report</button>
+    </header>
+    <pre class="report" id="report">Loading…</pre>
+
+    <div class="grid">
+      <!-- Standard vertical playlist (audit channel). 800px is the audited size. -->
+      <div class="case">
+        <h2>Vertical playlist @ 800px (audited size)</h2>
+        <wistia-playlist
+          channel-id="i3h8sa7g8t"
+          embed-host="fast.wistia.com"
+          style="width: 800px"
+        ></wistia-playlist>
+      </div>
+
+      <!-- Narrow width forces the title and media names to wrap. -->
+      <div class="case">
+        <h2>Narrow @ 360px (forces wrap)</h2>
+        <wistia-playlist
+          channel-id="i3h8sa7g8t"
+          embed-host="fast.wistia.com"
+          style="width: 360px"
+        ></wistia-playlist>
+      </div>
+
+      <!-- 320px equivalent: the audit's reflow target. -->
+      <div class="case">
+        <h2>Reflow @ 320px</h2>
+        <wistia-playlist
+          channel-id="i3h8sa7g8t"
+          embed-host="fast.wistia.com"
+          style="width: 320px"
+        ></wistia-playlist>
+      </div>
+
+      <!-- Bottom-aligned carousel overlay (the reviewer's screenshot scenario:
+      a wrapped title must not clip against the constrained overlay). -->
+      <div class="case">
+        <h2>Bottom-aligned overlay @ 700px</h2>
+        <wistia-playlist
+          channel-id="i3h8sa7g8t"
+          embed-host="fast.wistia.com"
+          carousel-position="bottom"
+          style="width: 700px"
+        ></wistia-playlist>
+      </div>
+    </div>
+
+    <script>
+      // WCAG 2.2 SC 1.4.12 Text Spacing — the exact override values from the
+      // Understanding doc. Applying these (and nothing else) must not clip or
+      // overlap any content.
+      const SPACING_CSS = `
+        *, *::before, *::after {
+          line-height: 1.5 !important;
+          letter-spacing: 0.12em !important;
+          word-spacing: 0.16em !important;
+        }
+        p {
+          /* "Spacing following paragraphs to >= 2x the font size" — this clause
+          of 1.4.12 targets paragraphs, which is what the standard test tools
+          (e.g. the Text Spacing bookmarklet) apply it to. */
+          margin-bottom: 2em !important;
+        }
+      `;
+
+      const STYLE_ID = 'wcag-text-spacing-override';
+
+      // Walk every shadow root on the page so the override reaches text that
+      // lives inside the carousel's nested shadow DOMs.
+      const allRoots = () => {
+        const roots = [document];
+        const visit = (node) => {
+          const els = node.querySelectorAll('*');
+          els.forEach((el) => {
+            if (el.shadowRoot) {
+              roots.push(el.shadowRoot);
+              visit(el.shadowRoot);
+            }
+          });
+        };
+        visit(document);
+        return roots;
+      };
+
+      let spacingOn = false;
+      const toggleSpacing = () => {
+        spacingOn = !spacingOn;
+        allRoots().forEach((root) => {
+          const existing = root.getElementById
+            ? root.getElementById(STYLE_ID)
+            : root.querySelector(`#${STYLE_ID}`);
+          if (spacingOn && !existing) {
+            const style = document.createElement('style');
+            style.id = STYLE_ID;
+            style.textContent = SPACING_CSS;
+            (root === document ? document.head : root).appendChild(style);
+          } else if (!spacingOn && existing) {
+            existing.remove();
+          }
+        });
+        report();
+      };
+
+      // Force a pathologically long title + media names to stress wrapping.
+      const LONG = 'Supercalifragilisticexpialidocious Wistia Channel Marketing Comparison Megaseries Episode';
+      let longOn = false;
+      const toggleLong = () => {
+        longOn = !longOn;
+        allRoots().forEach((root) => {
+          const title = root.querySelector?.('[data-testid="carousel-title"]');
+          if (title && longOn && !title.dataset.orig) {
+            title.dataset.orig = title.textContent;
+            title.textContent = LONG;
+          } else if (title && !longOn && title.dataset.orig) {
+            title.textContent = title.dataset.orig;
+            delete title.dataset.orig;
+          }
+          root.querySelectorAll?.('[data-testid="item-name"]').forEach((name) => {
+            if (longOn && !name.dataset.orig) {
+              name.dataset.orig = name.textContent;
+              name.textContent = `${LONG} — ${name.textContent}`;
+            } else if (!longOn && name.dataset.orig) {
+              name.textContent = name.dataset.orig;
+              delete name.dataset.orig;
+            }
+          });
+        });
+        report();
+      };
+
+      // a11y report: headings present? list named? any clipped text?
+      const report = () => {
+        const roots = allRoots();
+        const headings = [];
+        const lists = [];
+        const clipped = [];
+        roots.forEach((root) => {
+          root.querySelectorAll?.('h1,h2,h3,h4,h5,h6').forEach((h) => {
+            // Ignore this scratch page's own <h2> labels.
+            if (!h.closest?.('.case')) {
+              headings.push(`${h.tagName} "${h.textContent.trim().slice(0, 40)}"`);
+            }
+          });
+          root.querySelectorAll?.('ol#wistia-carousel-media-list').forEach((ol) => {
+            lists.push(ol.getAttribute('aria-label') ?? '(no aria-label)');
+          });
+          root.querySelectorAll?.('[data-testid="item-name"],[data-testid="carousel-title"]').forEach((el) => {
+            // A scrollable container (overflow auto/scroll) is NOT clipped —
+            // the content is reachable by scrolling, which satisfies 1.4.12.
+            const oy = getComputedStyle(el).overflowY;
+            const ox = getComputedStyle(el).overflowX;
+            const scrollable = /(auto|scroll)/.test(oy) || /(auto|scroll)/.test(ox);
+            // (a) the element clips its own content (only counts if NOT scrollable), or
+            // (b) the element overflows the carousel wrapper that clips it
+            const selfClipped =
+              !scrollable &&
+              (el.scrollHeight - el.clientHeight > 1 || el.scrollWidth - el.clientWidth > 1);
+            const host = el.getRootNode()?.host;
+            const wrapper =
+              el.closest('.carousel-wrapper') ||
+              host?.getRootNode?.()?.querySelector?.('.carousel-wrapper');
+            let ancestorClipped = false;
+            if (wrapper) {
+              const r = el.getBoundingClientRect();
+              const w = wrapper.getBoundingClientRect();
+              ancestorClipped = r.right - w.right > 1 || r.bottom - w.bottom > 1 || r.left - w.left < -1;
+            }
+            if (selfClipped || ancestorClipped) {
+              clipped.push(`${el.dataset.testid}: "${el.textContent.trim().slice(0, 30)}"`);
+            }
+          });
+        });
+        document.getElementById('report').textContent = [
+          `text-spacing override: ${spacingOn ? 'ON' : 'off'}    long title/names: ${longOn ? 'ON' : 'off'}`,
+          ``,
+          `headings inside playlist (should be 0): ${headings.length}`,
+          ...headings.map((h) => `  - ${h}`),
+          ``,
+          `media lists found: ${lists.length}  (aria-label should be the channel title)`,
+          ...lists.map((l) => `  - aria-label: ${l}`),
+          ``,
+          `clipped text nodes (should be 0): ${clipped.length}`,
+          ...clipped.map((c) => `  - ${c}`),
+        ].join('\n');
+      };
+
+      document.getElementById('toggle-spacing').addEventListener('click', toggleSpacing);
+      document.getElementById('toggle-longtitle').addEventListener('click', toggleLong);
+      document.getElementById('run-audit').addEventListener('click', report);
+
+      // Initial report once the carousel has had a chance to render.
+      const poll = setInterval(() => {
+        const ready = [...allRoots()].some((r) => r.querySelector?.('[data-testid="item-name"]'));
+        if (ready) {
+          clearInterval(poll);
+          report();
+        }
+      }, 300);
+      setTimeout(() => clearInterval(poll), 15000);
+    </script>
+  </body>
+</html>
